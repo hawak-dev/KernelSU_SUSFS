@@ -1,0 +1,182 @@
+name: Emergency Release Cleanup
+
+# Adapt to Node.js 24
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: 'Target Release Tag'
+        required: true
+        type: string
+      issue_type:
+        description: 'Issue Type'
+        required: true
+        type: choice
+        options:
+          - Normal
+          - Bug
+          - Critical
+      reference:
+        description: 'Issue link or description (optional)'
+        required: false
+        type: string
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # Only allowed for repository owner
+    if: github.actor == github.repository_owner
+
+    steps:
+      # ==================== Verify Release Exists ====================
+      - name: Verify Release Exists
+        run: |
+          if ! gh release view "${{ inputs.target_tag }}" --repo ${{ github.repository }} > /dev/null 2>&1; then
+            echo "::error::Release '${{ inputs.target_tag }}' does not exist"
+            exit 1
+          fi
+          echo "✅ Found Release: ${{ inputs.target_tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==================== Get Original Release Info ====================
+      - name: Get Original Release Info
+        id: info
+        run: |
+          gh release view "${{ inputs.target_tag }}" --repo ${{ github.repository }} \
+            --json name,body,isPrerelease > release_info.json
+
+          jq -r '.name' release_info.json > original_title.txt
+          jq -r '.body' release_info.json > original_body.txt
+
+          IS_PRERELEASE=$(jq -r '.isPrerelease' release_info.json)
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+          echo "📋 Original Title: $(cat original_title.txt)"
+          echo "📋 Pre-release: $IS_PRERELEASE"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==================== Handle Normal Type ====================
+      - name: Handle Normal Type - Mark Normal
+        if: inputs.issue_type == 'Normal'
+        run: |
+          cat > new_body.md << 'EOF'
+          > [!TIP]
+          > **This version has been verified and can be used normally.**
+          >
+          > **This release has been verified and is safe to use.**
+          EOF
+
+          sed -i 's/^          //' new_body.md
+
+          if [ -n "${{ inputs.reference }}" ]; then
+            echo "" >> new_body.md
+            echo "**Reference**: ${{ inputs.reference }}" >> new_body.md
+          fi
+
+          echo "" >> new_body.md
+          echo "---" >> new_body.md
+          echo "" >> new_body.md
+          cat original_body.txt >> new_body.md
+
+          gh release edit "${{ inputs.target_tag }}" --repo ${{ github.repository }} \
+            --notes-file new_body.md
+
+          echo "✅ Release marked as Normal"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==================== Handle Bug Type ====================
+      - name: Handle Bug Type
+        if: inputs.issue_type == 'Bug'
+        run: |
+          cat > new_body.md << 'EOF'
+          > [!WARNING]
+          > **This version has known bugs, recommended to use with caution.**
+          >
+          > **This release contains known bugs, use with caution.**
+          EOF
+
+          sed -i 's/^          //' new_body.md
+
+          if [ -n "${{ inputs.reference }}" ]; then
+            echo "" >> new_body.md
+            echo "**Reference**: ${{ inputs.reference }}" >> new_body.md
+          fi
+
+          echo "" >> new_body.md
+          echo "---" >> new_body.md
+          echo "" >> new_body.md
+          cat original_body.txt >> new_body.md
+
+          gh release edit "${{ inputs.target_tag }}" --repo ${{ github.repository }} \
+            --notes-file new_body.md
+
+          echo "✅ Release notes updated (Bug)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==================== Handle Critical Type ====================
+      - name: Handle Critical Type - Delete and Recreate
+        if: inputs.issue_type == 'Critical'
+        run: |
+          ORIGINAL_TITLE=$(cat original_title.txt)
+
+          # Build warning message
+          cat > new_body.md << 'EOF'
+          > [!CAUTION]
+          > **The assets of this release contain a critical bug causing device crash, all attachments have been cleared!**
+          >
+          > **Please do not use this version, wait for the fixed release.**
+          >
+          > **This release contained a critical bug causing device crashes. All assets have been removed!**
+          >
+          > **DO NOT use this version. Please wait for a fixed release.**
+          EOF
+
+          sed -i 's/^          //' new_body.md
+
+          if [ -n "${{ inputs.reference }}" ]; then
+            echo "" >> new_body.md
+            echo "**Reference**: ${{ inputs.reference }}" >> new_body.md
+          fi
+
+          echo "" >> new_body.md
+          echo "---" >> new_body.md
+          echo "" >> new_body.md
+          cat original_body.txt >> new_body.md
+
+          # Delete Release (keep Git Tag)
+          echo "🗑️ Deleting original Release..."
+          gh release delete "${{ inputs.target_tag }}" --repo ${{ github.repository }} --yes
+
+          # Determine prerelease flag
+          PRERELEASE_FLAG=""
+          if [ "${{ steps.info.outputs.is_prerelease }}" == "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          # Recreate Release (do not upload any files)
+          echo "🔄 Recreating Release..."
+          gh release create "${{ inputs.target_tag }}" --repo ${{ github.repository }} \
+            --title "$ORIGINAL_TITLE" \
+            --notes-file new_body.md \
+            $PRERELEASE_FLAG
+
+          echo "✅ Cleared all assets and recreated Release (Critical)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==================== Completion Notice ====================
+      - name: Done
+        run: |
+          echo "=========================================="
+          echo "🎯 Target Tag: ${{ inputs.target_tag }}"
+          echo "📌 Issue Type: ${{ inputs.issue_type }}"
+          echo "📝 Reference Info: ${{ inputs.reference || 'None' }}"
+          echo "=========================================="
+          echo "✅ Emergency cleanup completed!"

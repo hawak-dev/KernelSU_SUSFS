@@ -1,0 +1,48 @@
+name: "Bug Report / Bug Feedback"
+description: "Report a bug / Report Problem"
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please fill in the following information / Please fill in information below**
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "Bug Description / Problem Description"
+      description: "Describe the bug clearly / Describe problem clearly"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "Steps to Reproduce / Reproduction Steps"
+      description: "How to reproduce this issue / How to reproduce this issue"
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+
+  - type: textarea
+    id: device
+    attributes:
+      label: "Device Info / Device Info"
+      description: "Your device and kernel info / Device and kernel info"
+      value: |
+        - Device / Device:
+        - Android Version / Android Version:
+        - Kernel Version / Kernel Version:
+        - KernelSU Version / KernelSU Version:
+        - SUSFS Version / SUSFS Version:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs / Logs"
+      description: "Relevant logs or screenshots / Related logs or screenshots"
+      render: shell

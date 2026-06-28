@@ -1,0 +1,28 @@
+# ==================== Custom Commit Configuration ====================
+# This file is used to configure custom commits for SUSFS and SukiSU repositories
+#
+# Instructions for use:
+#   1. Set custom to true to enable custom commit feature
+#   2. Enter the desired commit hash after the corresponding config item
+#   3. Leave empty to use the latest commit of that branch
+#
+# Example:
+#   gki-android14-6.1=abc123def456
+#   sukisu=def789abc123
+#
+# ================================================================
+
+# Whether to enable custom commit (true/false)
+custom=false
+
+# ==================== commit hash for each SUSFS branch ====================
+# Only effective when custom=true
+gki-android12-5.10=
+gki-android13-5.15=
+gki-android14-6.1=
+gki-android15-6.6=
+gki-android16-6.12=
+
+# ==================== commit hash of SukiSU ====================
+# Only effective when custom=true and SukiSU variant is used
+sukisu=

@@ -1,0 +1,205 @@
+name: GetManager
+
+# Adapt to Node.js 24
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write  # Allow writing to repository contents (for pushing tags)
+  actions: read   # Allows triggering actions
+
+on:
+  workflow_call: # This allows this workflow to be called from another workflow
+    outputs:
+      susVer:
+        description: "The fetched SUSFS version number"
+        value: ${{ jobs.get_ksu_manager.outputs.susVer }}
+
+      ksuVer:
+        description: "The calculated KSU version number"
+        value: ${{ jobs.get_ksu_manager.outputs.ksuVer }}
+
+jobs:
+  get_ksu_manager:
+    runs-on: ubuntu-latest
+    outputs:
+      # Output 1: KSU version number
+      ksuVer: ${{ steps.get_version.outputs.kversion }}
+      # Output 2: SUSFS version number
+      susVer: ${{ steps.get_version.outputs.sversion }}
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: 🧐 Debug Workflow Caller Context
+        run: |
+          echo "==================== DEBUG CONTEXT ===================="
+          echo " "
+          echo "EVENT NAME: ${{ github.event_name }}"
+          echo " "
+          echo "--- CALLER INFORMATION ---"
+          echo "  - Caller Repository: ${{ github.caller_repository }}"
+          echo "  - Caller Workflow:   ${{ github.caller_workflow }}"
+          echo "  - Caller User:       ${{ github.triggering_actor }}"
+          echo " "
+          echo "--- WORKFLOW & JOB INFORMATION ---"
+          echo "  - Current Workflow:  ${{ github.workflow }}"
+          echo "  - Current Job ID:    ${{ github.job }}"
+          echo "  - Current Run ID:    ${{ github.run_id }}"
+          echo "  - Current Run Number:${{ github.run_number }}"
+          echo " "
+          echo "--- GIT REFERENCE INFORMATION ---"
+          echo "  - Git Ref:           ${{ github.ref }}"
+          echo "  - Ref Type:          ${{ github.ref_type }}"
+          echo " "
+          echo "======================================================="
+          
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl jq
+
+      - name: Get KSU & SUSFS Version
+        id: get_version
+        run: |
+          echo "This is the ReSukiSU variant"
+          git clone https://github.com/ReSukiSU/ReSukiSU.git KernelSU
+
+          cd KernelSU
+
+          # Calculate KSU version number
+          KSU_GIT_VERSION=$(git rev-list --count HEAD)
+          KSU_VERSION=$((30700 + KSU_GIT_VERSION))
+          echo $KSU_VERSION
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+
+          # Calculate SUSFS version number
+          INFO="https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android14-6.1/ksu_module_susfs/module.prop\?ref_type\=heads"
+          SUS_VERSION=$(curl -s $INFO | awk -F '=' '$1 == "version" { print $2 }')
+          echo $SUS_VERSION
+
+          # Export these two values to release
+          echo "kversion=$KSU_VERSION" >> $GITHUB_OUTPUT
+          echo "sversion=$SUS_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Add KernelSU
+        id: add_KSU
+        continue-on-error: true
+        run: |
+          echo "ReSukiSU..."
+          REPO="ReSukiSU/ReSukiSU"
+          KSUM="Manager"
+          FILENAME="build-manager.yml"
+          
+          # Initialize
+          NUMBER=0
+          DOWNLOAD_LIST=""
+
+          echo "Start searching for builds containing 'manager' artifacts..."
+          while true; do
+            echo "--------------------------------------------------"
+            echo "Checking history build number ${NUMBER} (0 represents newest)..."
+
+            if [ "$NUMBER" -ge 9 ]; then
+              echo "Search failed 9 times, exiting loop."
+              break
+            fi
+
+            BUILD_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success" |
+              jq -r '.workflow_runs['"$NUMBER"'].id')
+
+            echo "Found build ID: $BUILD_ID"
+
+            ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
+
+            result=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | contains("'"$KSUM"'")) | .name')
+
+            if [ -z "$result" ]; then
+              echo "No items containing '$KSUM' found"
+              NUMBER=$((NUMBER + 1))
+            else
+              echo "$result"
+              DOWNLOAD_LIST=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | contains("'"$KSUM"'")) | "\(.name)\t\(.archive_download_url)"')
+              break
+            fi
+          done
+         
+          if [ -z "$DOWNLOAD_LIST" ]; then
+            echo "Available download list for Manager artifacts not obtained."
+            exit 1
+          fi
+          
+          # Download and decompress all Manager artifacts
+          echo "$DOWNLOAD_LIST" | while IFS=$'\t' read -r NAME URL; do
+            SAFE_NAME=$(echo "$NAME" | tr '/ ' '__')
+            ZIP_NAME="ReSukiSU-${SAFE_NAME}(${{ env.KSU_VERSION }}).zip"
+            echo "Downloading $NAME -> $ZIP_NAME"
+            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -o "$ZIP_NAME" "$URL"
+            mkdir -p "manager-artifacts/$SAFE_NAME"
+            unzip -o "$ZIP_NAME" -d "manager-artifacts/$SAFE_NAME"
+            rm -rf "$ZIP_NAME"
+          done
+
+      - name: Add SUSFS Module
+        id: add_SUSFS
+        continue-on-error: true
+        run: |
+          BUILD_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/workflows/build.yml/runs?status=success" |
+          jq -r '.workflow_runs[0].id')
+
+          ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$BUILD_ID/artifacts")
+
+          DOWNLOAD_URL=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].archive_download_url') 
+
+          NAME=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].name')
+          echo "SUSFS_NAME=$NAME" >> $GITHUB_ENV
+          NAME="susfs-$NAME.zip"
+          
+          echo $DOWNLOAD_URL
+          echo $NAME
+          # Download Manager files
+          curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -o "$NAME" "$DOWNLOAD_URL"
+          echo "$NAME file has been downloaded.zip"
+          
+          
+          # Decompress artifact zip to retrieve the module files inside
+          mkdir -p susfs-module
+          unzip "$NAME" -d susfs-temp
+
+          # Check decompressed content: if loose files, compress to zip
+          cd susfs-temp
+          if ls *.zip 1>/dev/null 2>&1; then
+            # Already a zip file inside, move directly
+            mv *.zip ../susfs-module/
+          else
+            # Loose files, compress to zip
+            zip -r "../susfs-module/ksu_module_susfs.zip" .
+          fi
+          cd ..
+          rm -rf susfs-temp "$NAME"
+
+      - name: Notify on failure
+        if: steps.add_KSU.outcome == 'failure'
+        run: echo "Failed to download CI build of KSU!"
+
+      - name: Upload APK
+        if: steps.add_KSU.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ReSukiSU-Manager(${{ env.KSU_VERSION }})
+          path: |
+            **/*.apk
+
+      - name: Upload SUSFS Module
+        if: steps.add_SUSFS.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: susfs-${{ env.SUSFS_NAME }}
+          path: ./susfs-module/*
