@@ -297,6 +297,36 @@ jobs:
           rm -rf common
           git clone https://github.com/hawak-dev/android-kernel.git common -b main
 
+          
+# ==================== Apply BBRv3 Patch and Networking Configs ====================
+      # Downloads the specific BBRv3 patch from the raw repository and injects configuration parameters
+      - name: Apply BBRv3 Patch and Networking Configs
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -e
+          echo "📥 Downloading the specific BBRv3 patch for Android 13 (5.15)..."
+          wget -q "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android13-5.15.patch" -O bbrv3.patch
+          
+          echo "🛠️ Applying BBRv3 patch to the kernel source..."
+          patch -p1 -F 3 < bbrv3.patch || true
+          rm bbrv3.patch
+
+          echo "📝 Injecting required networking and BBRv3 parameters into defconfig..."
+          cat >> "$DEFCONFIG" << 'EOF'
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR3=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_IP_SET=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          EOF
+
       # ==================== Apply Stock Config Spoofing ====================
       - name: Apply Stock Config Spoofing
         run: |
