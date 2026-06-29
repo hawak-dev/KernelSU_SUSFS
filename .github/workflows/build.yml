@@ -214,15 +214,17 @@ jobs:
             mkbootimg
           key: toolchain-${{ runner.os }}-v1
 
-      # ==================== Download Toolchain ====================
-      - name: Download Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      # ==================== Download Local Clang Toolchain ====================
+      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside common directory to match your build.sh
+      - name: Download Local Clang Toolchain
+        working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          AOSP_MIRROR=https://android.googlesource.com
-          BRANCH=main-kernel-build-2024
-          git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
-          git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
-
+          echo "📥 Downloading the exact Google prebuilt Clang r530567..."
+          mkdir -p clang-r530567
+          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz"
+          tar -xzf clang.tar.gz -C clang-r530567
+          rm -f clang.tar.gz
+          echo "✅ Clang toolchain is ready inside common directory!"
       # ==================== Generate Signing Key ====================
       - name: Generate Signing Key
         run: |
@@ -1130,8 +1132,8 @@ jobs:
             fi
           fi
 
-      # ==================== Compile Kernel ====================
-      # Compile kernel using retry mechanism, auto retry after timeout
+   # ==================== Compile Kernel ====================
+      # Executes your custom build.sh script directly to compile with Clang 19 (r530567)
       - name: Compile Kernel
         uses: nick-fields/retry@v4
         with:
@@ -1139,126 +1141,52 @@ jobs:
           max_attempts: 3
           retry_on: timeout
           command: |
-            echo "::group::Build Instructions"
-            echo "In general, errors won't occur unless KSU and SUSFS repository codes differ."
-            echo "Wait for the adaptation; if you have the ability, submit the code to the SUKISU repository yourself."
-            echo "::endgroup::"
-            
-            echo "Current KSU latest commit date: ${KSU_LATEST_COMMIT_DATE}"
-            echo "Current SUSFS latest commit date: ${SUSFS_LATEST_COMMIT_DATE}"
+            echo "🚀 Launching custom compilation using your local build.sh script..."
             set -ex
-            cd "$KERNEL_ROOT"
+            cd "$KERNEL_ROOT/common"
+            
+            # Ensure your local script has execution permission
+            chmod +x build.sh
+            
+            # Execute your clean local compilation script directly
+            ./build.sh
 
-            sed -i 's/BUILD_SYSTEM_DLKM=1/BUILD_SYSTEM_DLKM=0/' ./common/build.config.gki.aarch64
-            sed -i '/MODULES_ORDER=android\/gki_aarch64_modules/d' ./common/build.config.gki.aarch64
-            sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64
-
-            # 1. Disable check_defconfig for build.sh to read your custom file directly
-            sed -i 's/check_defconfig//g' ./common/build.config.gki || true
-
-            if [ -f "build/build.sh" ]; then
-              # 5.x kernels use traditional build scripts
-              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
-              strings "out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image" | grep 'Linux version'
+            # Verification of compiled output inside your custom out directory
+            if [ -f "out/arch/arm64/boot/Image" ]; then
+              echo "✅ Kernel Image compiled successfully!"
+              strings out/arch/arm64/boot/Image | grep 'Linux version' || true
             else
-              # 6.1+ kernels use Bazel build
-
-              # 2. Disable check_defconfig for Bazel to bypass strict Stock GKI verification
-              sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' common/BUILD.bazel || true
-
-              # Extract gki_defconfig modifications to fragment to avoid bazel trim check failure
-              FRAG="common/arch/arm64/configs/ksu.fragment"
-              diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
-              cp "$DEFCONFIG.orig" "$DEFCONFIG"
-              echo "=== KSU Fragment Content ==="
-              cat "$FRAG"
-              echo "========================="
-              # Pass argument only when fragment is not empty
-              FRAG_FLAG=""
-              if [ -s "$FRAG" ]; then
-                FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
-              fi
-              # 6.12+ uses lto=none (Rust kernel modules are incompatible with thin LTO)
-              LTO_FLAG="--lto=thin"
-              if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
-                LTO_FLAG="--lto=none"
-              fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
-              strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
+              echo "❌ Error: Compiled Image not found at expected path: out/arch/arm64/boot/Image!" >&2
+              exit 1
             fi
 
-            echo "If dates differ significantly, patches may fail and compilation will abort."
-
       # ==================== Prepare Boot Image ====================
-      # Copy build artifacts to the working directory
+      # Copies the compiled artifacts from your custom out directory to the packaging workspace
       - name: Prepare Boot Image
         run: |
           mkdir -p bootimgs
 
-          if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
-            SRC_DIR="$KERNEL_ROOT/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
+          # Aligning path with your local build.sh output directory
+          SRC_DIR="$KERNEL_ROOT/common/out/arch/arm64/boot"
+
+          if [ -f "$SRC_DIR/Image" ]; then
+            cp "$SRC_DIR/Image" ./bootimgs/
+            cp "$SRC_DIR/Image" ./
+            
+            # Compress the Image using gzip as required for booting and AnyKernel3
+            gzip -n -k -f -9 ./Image > ./Image.gz
+            
+            # Check and copy lz4 if generated by your local setup, or fallback to manual lz4 compression
+            if [ -f "$SRC_DIR/Image.lz4" ]; then
+              cp "$SRC_DIR/Image.lz4" ./bootimgs/
+              cp "$SRC_DIR/Image.lz4" ./
+            else
+              echo "lz4 image not found in boot dir, generating it on the fly..."
+              lz4 -f -9 ./Image ./Image.lz4 || true
+              cp ./Image.lz4 ./bootimgs/ || true
+              cp ./Image.lz4 ./ || true
+            fi
           else
-            SRC_DIR="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
+            echo "::error::Compiled Image not found in output folder: $SRC_DIR/Image!"
+            exit 1
           fi
-
-          cp "$SRC_DIR/Image" ./bootimgs/
-          cp "$SRC_DIR/Image.lz4" ./bootimgs/
-          cp "$SRC_DIR/Image" ./
-          cp "$SRC_DIR/Image.lz4" ./
-          gzip -n -k -f -9 ./Image > ./Image.gz
-
-      # ==================== Create AnyKernel3 Zip ====================
-      - name: Create AnyKernel3 Zip
-        run: |
-          cd $ANYKERNEL3
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
-          mv ../Image ./Image
-          zip -r "../$ZIP_NAME" ./*
-
-      # ==================== Collect Patch Conflict Files ====================
-      # Collect all .rej files to debug patch failures
-      - name: Collect Patch Conflict Files
-        if: always()
-        run: |
-          REJECTS_DIR="$GITHUB_WORKSPACE/patch-rejects"
-          mkdir -p "$REJECTS_DIR"
-
-          mapfile -t REJS < <(find "$KERNEL_ROOT" -type f -name '*.rej')
-          REJ_COUNT=${#REJS[@]}
-          echo "Found $REJ_COUNT .rej files"
-          echo "REJ_COUNT=$REJ_COUNT" >> $GITHUB_ENV
-
-          if [ "$REJ_COUNT" -gt 0 ]; then
-            for REJ in "${REJS[@]}"; do
-              REL="${REJ#"$KERNEL_ROOT"/}"
-              DEST="$REJECTS_DIR/$REL"
-              mkdir -p "$(dirname "$DEST")"
-              cp "$REJ" "$DEST"
-
-              ORIG="${REJ%.rej}"
-              if [ -f "$ORIG" ]; then
-                cp "$ORIG" "${DEST%.rej}"
-              fi
-              echo "$REL" >> "$REJECTS_DIR/index.txt"
-            done
-          fi
-
-      # ==================== Upload Build Artifacts ====================
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: ReSukiSU_kernel-${{ env.CONFIG }}
-          path: |
-            *AnyKernel3.zip
-#            *.img
-          compression-level: 9
-
-      # ==================== Upload Patch Conflict Files ====================
-      - name: Upload Patch Conflict Files
-        if: always() && env.REJ_COUNT > 0
-        uses: actions/upload-artifact@v6
-        with:
-          name: ReSukiSU_kernel-${{ env.CONFIG }}-Rejects
-          path: patch-rejects/
-          if-no-files-found: ignore
-          compression-level: 9
