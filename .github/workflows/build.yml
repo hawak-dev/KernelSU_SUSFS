@@ -293,13 +293,9 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-          echo "🔄 Replacing Google Kernel with your custom clean kernel..."
+          echo "🔄 Replacing Google Kernel with your custom clean kernel repository..."
           rm -rf common
           git clone https://github.com/hawak-dev/android-kernel.git common -b main
-
-          echo "🛠️ Modifying defconfig to disable Auto Version and inject your name..."
-          sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' common/arch/arm64/configs/gki_defconfig || true
-          sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="-Hawak"/' common/arch/arm64/configs/gki_defconfig || true
 
       # ==================== Apply Stock Config Spoofing ====================
       - name: Apply Stock Config Spoofing
@@ -595,7 +591,7 @@ jobs:
                 if grep -qF '#include <linux/pkeys.h>' ./fs/proc/task_mmu.c; then
                   sed -i '/#include <linux\/pkeys.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/task_mmu.c
                 elif grep -qF '#include <linux/uaccess.h>' ./fs/proc/task_mmu.c; then
-                  sed -i '/#include <linux\/uaccess.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/task_mmu.c
+                  sed -i '/#include <linux\/uaccess.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/uaccess.h>\n#endif' ./fs/proc/task_mmu.c
                 else
                   sed -i '0,/^#include /s//#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif\n&/' ./fs/proc/task_mmu.c
                 fi
@@ -1085,7 +1081,7 @@ jobs:
               sed -i "/^CONFIG_LOCALVERSION=/ s/=\"[^\"]*\"/=\"${KMI_LOCAL}\"/" ./common/arch/arm64/configs/gki_defconfig 2>/dev/null || true
             elif [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
               sed -i "\$s|echo \"\$res\"|echo \"${CLEAN_VERSION}\"|" ./common/scripts/setlocalversion 2>/dev/null || true
-              sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="'"$CLEAN_VERSION"'"/' ./common/arch/arm64/configs/gki_defconfig
+              sed -i '/^CONFIG_LOCALVERSION=/ s/=\"\([^\"]*\)\"/="'"$CLEAN_VERSION"'"/' ./common/arch/arm64/configs/gki_defconfig
             else
               SUFFIX="-${KMI_TAG}${CLEAN_VERSION}"
               perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${SUFFIX}"'"/s' ./common/scripts/setlocalversion 2>/dev/null || true
@@ -1134,7 +1130,7 @@ jobs:
             else
               echo "Applying 6.x mkcompile_h patch: $f"
               if grep -q 'UTS_VERSION=' "$f"; then
-                perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+                perl -pi -e "s{UTS_VERSION=\"\\\$\\\\(\\\\*?\\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
               else
                 perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
               fi
