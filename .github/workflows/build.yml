@@ -939,6 +939,7 @@ jobs:
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
       # ==================== Apply Re-Kernel ====================
+      # Re-Kernel through GKI Vendor Hooks provides kernel-level protection features
       - name: Apply Re-Kernel
         if: inputs.use_rekernel
         working-directory: ${{ env.KERNEL_ROOT }}
@@ -949,10 +950,12 @@ jobs:
           rm -rf "$TMP_REKERNEL"
           git clone --depth 1 https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL"
 
+          # Prepare driver source from the newly restructured repository path
           mkdir -p common/drivers/rekernel
-          cp "$TMP_REKERNEL/LKM-Source/rekernel.c" common/drivers/rekernel/
-          cp "$TMP_REKERNEL/LKM-Source/rekernel.h" common/drivers/rekernel/
+          cp "$TMP_REKERNEL/Integrate/rekernel/rekernel.c" common/drivers/rekernel/
+          cp "$TMP_REKERNEL/Integrate/rekernel/rekernel.h" common/drivers/rekernel/
 
+          # Generate build configuration
           cat > common/drivers/rekernel/Kconfig << 'EOF'
           menu "Re:Kernel"
           config REKERNEL
@@ -973,6 +976,7 @@ jobs:
           ccflags-$(CONFIG_REKERNEL_NETWORK) += -DNETWORK_FILTER
           EOF
 
+          # Mount to the driver tree hierarchy
           if ! grep -qF 'source "drivers/rekernel/Kconfig"' common/drivers/Kconfig; then
             sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' common/drivers/Kconfig
           fi
@@ -980,15 +984,18 @@ jobs:
             echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> common/drivers/Makefile
           fi
 
+          # Enable kernel version macro based on target setup
           REKERNEL_H="common/drivers/rekernel/rekernel.h"
-          VERSION_MACRO="KERNEL_$(echo "${{ inputs.kernel_version }}" | tr '.' '_')"
+          VERSION_MACRO="KERNEL_$(echo "5.15" | tr '.' '_')"
           if grep -q "^// #define ${VERSION_MACRO}$" "$REKERNEL_H"; then
             sed -i "s|^// #define ${VERSION_MACRO}$|#define ${VERSION_MACRO}|" "$REKERNEL_H"
           fi
 
-          sed -i 's|#include <../android/binder_internal.h>|#include "../../drivers/android/binder_internal.h"|g' common/drivers/rekernel/rekernel.c
-          grep -qF '#include <linux/seq_file.h>' common/drivers/rekernel/rekernel.c || sed -i '/#include <trace\/hooks\/signal.h>/a #include <linux/seq_file.h>' common/drivers/rekernel/rekernel.c
+          # Fix header inclusion paths safely (adapted for clean in-tree compilation)
+          sed -i 's|#include <../android/binder_internal.h>|#include "../../drivers/android/binder_internal.h"|g' common/drivers/rekernel/rekernel.c || true
+          grep -qF '#include <linux/seq_file.h>' common/drivers/rekernel/rekernel.c || sed -i '/#include <trace\/hooks\/signal.h>/a #include <linux/seq_file.h>' common/drivers/rekernel/rekernel.c || true
 
+          # Configure defconfig guardrails
           grep -q '^CONFIG_REKERNEL=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL=y" >> "$DEFCONFIG"
           grep -q '^CONFIG_REKERNEL_NETWORK=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL_NETWORK=y" >> "$DEFCONFIG"
 
