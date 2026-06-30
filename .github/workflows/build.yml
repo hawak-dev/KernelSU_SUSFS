@@ -516,6 +516,8 @@ jobs:
               sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
             fi
           fi
+                    # 🚀 ضعه هنا تماماً لتعديل الملف قبل عمل الباتش الرئيسي
+          sed -i '/#include <linux\/pkeys.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/task_mmu.c
 
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
 
