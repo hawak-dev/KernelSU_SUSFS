@@ -934,7 +934,7 @@ jobs:
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
-      # ==================== Apply Re-Kernel ====================
+# ==================== Apply Re-Kernel ====================
       # Re-Kernel through GKI Vendor Hooks provides kernel-level protection features
       - name: Apply Re-Kernel
         if: inputs.use_rekernel
@@ -950,6 +950,17 @@ jobs:
           mkdir -p common/drivers/rekernel
           cp "$TMP_REKERNEL/Integrate/rekernel/rekernel.c" common/drivers/rekernel/
           cp "$TMP_REKERNEL/Integrate/rekernel/rekernel.h" common/drivers/rekernel/
+
+          # 🛠️ [حـل جـذري] تحويل التعاريف تلقائياً لتتوافق مع proc_ops في نواة 5.15
+          REKERNEL_FILE="common/drivers/rekernel/rekernel.c"
+          if grep -q 'struct proc_ops' common/include/linux/proc_fs.h; then
+            echo "🔄 Adjusting rekernel.c for struct proc_ops compatibility..."
+            sed -i 's/file_operations/proc_ops/g' "$REKERNEL_FILE"
+            sed -i 's/\.open/\.proc_open/g' "$REKERNEL_FILE"
+            sed -i 's/\.read/\.proc_read/g' "$REKERNEL_FILE"
+            sed -i 's/\.llseek/\.proc_lseek/g' "$REKERNEL_FILE"
+            sed -i 's/\.release/\.proc_release/g' "$REKERNEL_FILE"
+          fi
 
           # Generate build configuration
           cat > common/drivers/rekernel/Kconfig << 'EOF'
