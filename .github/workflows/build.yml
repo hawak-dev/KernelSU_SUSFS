@@ -215,20 +215,29 @@ jobs:
           key: toolchain-${{ runner.os }}-v1
 
       # ==================== Download Local Clang Toolchain ====================
-      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside your common repository safely
+      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside the common directory.
+      # This step MUST be placed right before "Compile Kernel" and after all sync/patch steps
+      # to prevent the "common" folder from being deleted or missing.
       - name: Download Local Clang Toolchain
-        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -e
-          # Move inside common directory at runtime to avoid GitHub Actions pre-check bugs
-          cd common
+          TARGET_DIR="${{ env.KERNEL_ROOT }}/common"
           
+          # Double check if common directory exists (it should, since sync is done)
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "❌ Error: The 'common' directory does not exist yet at $TARGET_DIR!"
+            echo "Please ensure this step is placed AFTER 'Initialize and Sync Kernel Source'."
+            exit 1
+          fi
+          
+          cd "$TARGET_DIR"
           echo "📥 Downloading the exact Google prebuilt Clang r530567..."
           mkdir -p clang-r530567
-          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz"
+          curl -Lo clang.tar.gz "[https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz)"
           tar -xzf clang.tar.gz -C clang-r530567
           rm -f clang.tar.gz
-          echo "✅ Clang toolchain is ready inside common directory!"
+          echo "✅ Clang toolchain is ready inside $TARGET_DIR/clang-r530567!"
+
       # ==================== Generate Signing Key ====================
       - name: Generate Signing Key
         run: |
@@ -1136,8 +1145,8 @@ jobs:
             fi
           fi
 
-      # ==================== Compile Kernel ====================
-      # Executes your exact local shell script to compile the kernel with all pre-applied patches
+       # ==================== Compile Kernel ====================
+      # Executes your custom build.sh script directly to compile with Clang 19 (r530567)
       - name: Compile Kernel
         uses: nick-fields/retry@v4
         with:
@@ -1149,7 +1158,7 @@ jobs:
             set -ex
             cd "$KERNEL_ROOT/common"
             
-            # Grant execution permission to your script safely
+            # Ensure your local script has execution permission
             chmod +x build.sh
             
             # Execute your clean local compilation script directly
@@ -1164,7 +1173,8 @@ jobs:
               exit 1
             fi
 
-      # ==================== Prepare Boot Image ====================
+
+        # ==================== Prepare Boot Image ====================
       # Copies the compiled artifacts from your custom out directory to the packaging workspace
       - name: Prepare Boot Image
         run: |
