@@ -1177,20 +1177,29 @@ jobs:
             fi
           fi
 
+# ==================== Cache Custom Clang ====================
+      # Checks if the Clang toolchain is already stored in GitHub Cache to skip downloading
+      - name: Cache Custom Clang
+        id: cache-custom-clang
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.KERNEL_ROOT }}/common/clang-r530567
+          key: custom-clang-r530567-v1
+
       # ==================== Download Local Clang Toolchain ====================
       # Downloads and prepares the exact Clang 19 (r530567) toolchain inside your common repository safely
       - name: Download Local Clang Toolchain
+        if: steps.cache-custom-clang.outputs.cache-hit != 'true'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -e
           cd common
-          echo "📥 Downloading the exact Google prebuilt Clang r530567..."
+          echo "📥 Cache Miss: Downloading the exact Google prebuilt Clang r530567..."
           mkdir -p clang-r530567
           curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz"
           tar -xzf clang.tar.gz -C clang-r530567
           rm -f clang.tar.gz
           echo "✅ Clang toolchain is ready inside common directory!"
-
       # ==================== Compile Kernel ====================
       # Executes your custom build.sh script directly to compile with Clang 19 (r530567)
       - name: Compile Kernel
