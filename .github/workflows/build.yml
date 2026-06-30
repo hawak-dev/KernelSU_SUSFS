@@ -215,10 +215,14 @@ jobs:
           key: toolchain-${{ runner.os }}-v1
 
       # ==================== Download Local Clang Toolchain ====================
-      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside common directory to match your build.sh
+      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside your common repository safely
       - name: Download Local Clang Toolchain
-        working-directory: ${{ env.KERNEL_ROOT }}/common
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
+          set -e
+          # Move inside common directory at runtime to avoid GitHub Actions pre-check bugs
+          cd common
+          
           echo "📥 Downloading the exact Google prebuilt Clang r530567..."
           mkdir -p clang-r530567
           curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz"
@@ -1132,8 +1136,8 @@ jobs:
             fi
           fi
 
-   # ==================== Compile Kernel ====================
-      # Executes your custom build.sh script directly to compile with Clang 19 (r530567)
+      # ==================== Compile Kernel ====================
+      # Executes your exact local shell script to compile the kernel with all pre-applied patches
       - name: Compile Kernel
         uses: nick-fields/retry@v4
         with:
@@ -1145,7 +1149,7 @@ jobs:
             set -ex
             cd "$KERNEL_ROOT/common"
             
-            # Ensure your local script has execution permission
+            # Grant execution permission to your script safely
             chmod +x build.sh
             
             # Execute your clean local compilation script directly
