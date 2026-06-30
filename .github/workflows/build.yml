@@ -184,7 +184,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
+          sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves lz4
 
       # ==================== Configure ccache ====================
       - name: Configure ccache
@@ -214,29 +214,14 @@ jobs:
             mkbootimg
           key: toolchain-${{ runner.os }}-v1
 
-      # ==================== Download Local Clang Toolchain ====================
-      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside the common directory.
-      # This step MUST be placed right before "Compile Kernel" and after all sync/patch steps
-      # to prevent the "common" folder from being deleted or missing.
-      - name: Download Local Clang Toolchain
+      # ==================== Download Toolchain ====================
+      - name: Download Toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          set -e
-          TARGET_DIR="${{ env.KERNEL_ROOT }}/common"
-          
-          # Double check if common directory exists (it should, since sync is done)
-          if [ ! -d "$TARGET_DIR" ]; then
-            echo "❌ Error: The 'common' directory does not exist yet at $TARGET_DIR!"
-            echo "Please ensure this step is placed AFTER 'Initialize and Sync Kernel Source'."
-            exit 1
-          fi
-          
-          cd "$TARGET_DIR"
-          echo "📥 Downloading the exact Google prebuilt Clang r530567..."
-          mkdir -p clang-r530567
-          curl -Lo clang.tar.gz "[https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz)"
-          tar -xzf clang.tar.gz -C clang-r530567
-          rm -f clang.tar.gz
-          echo "✅ Clang toolchain is ready inside $TARGET_DIR/clang-r530567!"
+          AOSP_MIRROR=https://android.googlesource.com
+          BRANCH=main-kernel-build-2024
+          git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
+          git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
 
       # ==================== Generate Signing Key ====================
       - name: Generate Signing Key
@@ -311,36 +296,6 @@ jobs:
           echo "🔄 Replacing Google Kernel with your custom clean kernel repository..."
           rm -rf common
           git clone https://github.com/hawak-dev/android-kernel.git common -b main
-
-          
-# ==================== Apply BBRv3 Patch and Networking Configs ====================
-      # Downloads the specific BBRv3 patch from the raw repository and injects configuration parameters
-      - name: Apply BBRv3 Patch and Networking Configs
-        working-directory: ${{ env.KERNEL_ROOT }}/common
-        run: |
-          set -e
-          echo "📥 Downloading the specific BBRv3 patch for Android 13 (5.15)..."
-          wget -q "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android13-5.15.patch" -O bbrv3.patch
-          
-          echo "🛠️ Applying BBRv3 patch to the kernel source..."
-          patch -p1 -F 3 < bbrv3.patch || true
-          rm bbrv3.patch
-
-          echo "📝 Injecting required networking and BBRv3 parameters into defconfig..."
-          cat >> "$DEFCONFIG" << 'EOF'
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR3=y
-          CONFIG_DEFAULT_BBR=y
-          CONFIG_DEFAULT_TCP_CONG="bbr"
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_NET_SCH_CAKE=y
-          CONFIG_IP_SET=y
-          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-          CONFIG_NETFILTER_XT_SET=y
-          CONFIG_NETFILTER_XT_TARGET_LOG=y
-          CONFIG_NETFILTER_XT_MATCH_RECENT=y
-          EOF
 
       # ==================== Apply Stock Config Spoofing ====================
       - name: Apply Stock Config Spoofing
@@ -636,7 +591,7 @@ jobs:
                 if grep -qF '#include <linux/pkeys.h>' ./fs/proc/task_mmu.c; then
                   sed -i '/#include <linux\/pkeys.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/task_mmu.c
                 elif grep -qF '#include <linux/uaccess.h>' ./fs/proc/task_mmu.c; then
-                  sed -i '/#include <linux\/uaccess.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/uaccess.h>\n#endif' ./fs/proc/task_mmu.c
+                  sed -i '/#include <linux\/uaccess.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/task_mmu.c
                 else
                   sed -i '0,/^#include /s//#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif\n&/' ./fs/proc/task_mmu.c
                 fi
@@ -979,7 +934,7 @@ jobs:
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
-# ==================== Apply Re-Kernel ====================
+      # ==================== Apply Re-Kernel ====================
       # Re-Kernel through GKI Vendor Hooks provides kernel-level protection features
       - name: Apply Re-Kernel
         if: inputs.use_rekernel
@@ -989,20 +944,57 @@ jobs:
           echo "Integrating Re-Kernel..."
           TMP_REKERNEL=/tmp/rekernel
           rm -rf "$TMP_REKERNEL"
-          
-          # 1. Cloning the official Re-Kernel repository
           git clone --depth 1 https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL"
 
-          # 2. Moving into the kernel integration directory to use the official script
-          cd common
-          
-          # 3. Executing the official automated patches.sh script provided by developers
-          echo "Executing the official patches.sh automated script..."
-          bash "$TMP_REKERNEL/Integrate/patches.sh"
+          # Prepare driver source from the newly restructured repository path
+          mkdir -p common/drivers/rekernel
+          cp "$TMP_REKERNEL/Integrate/rekernel/rekernel.c" common/drivers/rekernel/
+          cp "$TMP_REKERNEL/Integrate/rekernel/rekernel.h" common/drivers/rekernel/
 
-          # 4. Enforce enabling the protection feature inside your custom defconfig
-          echo "CONFIG_REKERNEL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_REKERNEL_NETWORK=y" >> arch/arm64/configs/gki_defconfig
+          # Generate build configuration
+          cat > common/drivers/rekernel/Kconfig << 'EOF'
+          menu "Re:Kernel"
+          config REKERNEL
+              bool "Re:Kernel support (GKI Vendor Hooks)"
+              default y
+              help
+                Enable Re-Kernel support via GKI Vendor Hooks.
+
+          config REKERNEL_NETWORK
+              bool "Re:Kernel NetReceive unfreeze support"
+              depends on REKERNEL
+              default n
+          endmenu
+          EOF
+
+          cat > common/drivers/rekernel/Makefile << 'EOF'
+          obj-$(CONFIG_REKERNEL) += rekernel.o
+          ccflags-$(CONFIG_REKERNEL_NETWORK) += -DNETWORK_FILTER
+          EOF
+
+          # Mount to the driver tree hierarchy
+          if ! grep -qF 'source "drivers/rekernel/Kconfig"' common/drivers/Kconfig; then
+            sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' common/drivers/Kconfig
+          fi
+          if ! grep -qF 'obj-$(CONFIG_REKERNEL) += rekernel/' common/drivers/Makefile; then
+            echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> common/drivers/Makefile
+          fi
+
+          # Enable kernel version macro based on target setup
+          REKERNEL_H="common/drivers/rekernel/rekernel.h"
+          VERSION_MACRO="KERNEL_$(echo "5.15" | tr '.' '_')"
+          if grep -q "^// #define ${VERSION_MACRO}$" "$REKERNEL_H"; then
+            sed -i "s|^// #define ${VERSION_MACRO}$|#define ${VERSION_MACRO}|" "$REKERNEL_H"
+          fi
+
+          # Fix header inclusion paths safely (adapted for clean in-tree compilation)
+          sed -i 's|#include <../android/binder_internal.h>|#include "../../drivers/android/binder_internal.h"|g' common/drivers/rekernel/rekernel.c || true
+          grep -qF '#include <linux/seq_file.h>' common/drivers/rekernel/rekernel.c || sed -i '/#include <trace\/hooks\/signal.h>/a #include <linux/seq_file.h>' common/drivers/rekernel/rekernel.c || true
+
+          # Configure defconfig guardrails
+          grep -q '^CONFIG_REKERNEL=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL=y" >> "$DEFCONFIG"
+          grep -q '^CONFIG_REKERNEL_NETWORK=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL_NETWORK=y" >> "$DEFCONFIG"
+
       # ==================== Configure Kernel Options ====================
       - name: Configure Kernel Options
         working-directory: ${{ env.KERNEL_ROOT }}
@@ -1115,6 +1107,35 @@ jobs:
             fi
           fi
 
+      # ==================== Apply BBRv3 Patch and Networking Configs ====================
+      # Downloads the specific BBRv3 patch from the raw repository and injects configuration parameters
+      - name: Apply BBRv3 Patch and Networking Configs
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -e
+          echo "📥 Downloading the specific BBRv3 patch for Android 13 (5.15)..."
+          wget -q "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android13-5.15.patch" -O bbrv3.patch
+          
+          echo "🛠️ Applying BBRv3 patch to the kernel source..."
+          patch -p1 -F 3 < bbrv3.patch || true
+          rm bbrv3.patch
+
+          echo "📝 Injecting required networking and BBRv3 parameters into defconfig..."
+          cat >> "$DEFCONFIG" << 'EOF'
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR3=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_IP_SET=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          EOF
+
       # ==================== Set Custom Build Time ====================
       - name: Set Custom Build Time
         shell: bash
@@ -1138,14 +1159,28 @@ jobs:
             else
               echo "Applying 6.x mkcompile_h patch: $f"
               if grep -q 'UTS_VERSION=' "$f"; then
-                perl -pi -e "s{UTS_VERSION=\"\\\$\\\\(\\\\*?\\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+                perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
               else
                 perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
               fi
             fi
           fi
 
-       # ==================== Compile Kernel ====================
+      # ==================== Download Local Clang Toolchain ====================
+      # Downloads and prepares the exact Clang 19 (r530567) toolchain inside your common repository safely
+      - name: Download Local Clang Toolchain
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -e
+          cd common
+          echo "📥 Downloading the exact Google prebuilt Clang r530567..."
+          mkdir -p clang-r530567
+          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz"
+          tar -xzf clang.tar.gz -C clang-r530567
+          rm -f clang.tar.gz
+          echo "✅ Clang toolchain is ready inside common directory!"
+
+      # ==================== Compile Kernel ====================
       # Executes your custom build.sh script directly to compile with Clang 19 (r530567)
       - name: Compile Kernel
         uses: nick-fields/retry@v4
@@ -1173,8 +1208,7 @@ jobs:
               exit 1
             fi
 
-
-        # ==================== Prepare Boot Image ====================
+      # ==================== Prepare Boot Image ====================
       # Copies the compiled artifacts from your custom out directory to the packaging workspace
       - name: Prepare Boot Image
         run: |
@@ -1204,3 +1238,59 @@ jobs:
             echo "::error::Compiled Image not found in output folder: $SRC_DIR/Image!"
             exit 1
           fi
+
+      # ==================== Create AnyKernel3 Zip ====================
+      - name: Create AnyKernel3 Zip
+        run: |
+          cd $ANYKERNEL3
+          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          mv ../Image ./Image
+          zip -r "../$ZIP_NAME" ./*
+
+      # ==================== Collect Patch Conflict Files ====================
+      # Collect all .rej files to debug patch failures
+      - name: Collect Patch Conflict Files
+        if: always()
+        run: |
+          REJECTS_DIR="$GITHUB_WORKSPACE/patch-rejects"
+          mkdir -p "$REJECTS_DIR"
+
+          mapfile -t REJS < <(find "$KERNEL_ROOT" -type f -name '*.rej')
+          REJ_COUNT=${#REJS[@]}
+          echo "Found $REJ_COUNT .rej files"
+          echo "REJ_COUNT=$REJ_COUNT" >> $GITHUB_ENV
+
+          if [ "$REJ_COUNT" -gt 0 ]; then
+            for REJ in "${REJS[@]}"; do
+              REL="${REJ#"$KERNEL_ROOT"/}"
+              DEST="$REJECTS_DIR/$REL"
+              mkdir -p "$(dirname "$DEST")"
+              cp "$REJ" "$DEST"
+
+              ORIG="${REJ%.rej}"
+              if [ -f "$ORIG" ]; then
+                cp "$ORIG" "${DEST%.rej}"
+              fi
+              echo "$REL" >> "$REJECTS_DIR/index.txt"
+            done
+          fi
+
+      # ==================== Upload Build Artifacts ====================
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ReSukiSU_kernel-${{ env.CONFIG }}
+          path: |
+            *AnyKernel3.zip
+#            *.img
+          compression-level: 9
+
+      # ==================== Upload Patch Conflict Files ====================
+      - name: Upload Patch Conflict Files
+        if: always() && env.REJ_COUNT > 0
+        uses: actions/upload-artifact@v6
+        with:
+          name: ReSukiSU_kernel-${{ env.CONFIG }}-Rejects
+          path: patch-rejects/
+          if-no-files-found: ignore
+          compression-level: 9
