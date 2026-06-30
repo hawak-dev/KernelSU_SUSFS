@@ -1212,7 +1212,7 @@ jobs:
           rm -f clang.tar.gz
           echo "✅ Clang toolchain is ready inside common directory!"
       # ==================== Compile Kernel ====================
-      # Executes your custom build.sh script directly to compile with Clang 19 (r530567)
+      # Executes your custom build.sh script and auto-dumps hidden logs on compilation failure
       - name: Compile Kernel
         uses: nick-fields/retry@v4
         with:
@@ -1221,14 +1221,30 @@ jobs:
           retry_on: timeout
           command: |
             echo "🚀 Launching custom compilation using your local build.sh script..."
-            set -ex
             cd "$KERNEL_ROOT/common"
-            
-            # Ensure your local script has execution permission
             chmod +x build.sh
             
-            # Execute your clean local compilation script directly
+            # تشغيل السكربت والتقاط رمز الخروج برمجياً لمنع الانهيار الصامت
+            set +e
             ./build.sh
+            BUILD_EXIT_CODE=$?
+            set -e
+
+            # إذا فشل البناء، يتم رفع الحجب وطباعة السجلات المخفية فوراً على الشاشة
+            if [ $BUILD_EXIT_CODE -ne 0 ]; then
+              echo "=========================================================="
+              echo "❌ ERROR DETECTED: Dumping hidden compilation logs below:"
+              echo "=========================================================="
+              if [ -f "build_logs/error.log" ]; then
+                echo "=== Content of build_logs/error.log ==="
+                cat build_logs/error.log
+              fi
+              if [ -f "build_logs/build.log" ]; then
+                echo "=== Last 80 lines of build_logs/build.log ==="
+                tail -n 80 build_logs/build.log
+              fi
+              exit $BUILD_EXIT_CODE
+            fi
 
             # Verification of compiled output inside your custom out directory
             if [ -f "out/arch/arm64/boot/Image" ]; then
