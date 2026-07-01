@@ -517,8 +517,6 @@ jobs:
             fi
           fi
           
-          # 📑 [تمت الإزالة التنظيفية للسطر القديم رقم 2 المسبب للمشاكل لضمان استقرار شجرة الكود الافتراضية]
-          
           # تشغيل أمر الدمج السحابي الرسمي لـ SUSFS بسلام
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
 
@@ -598,7 +596,7 @@ jobs:
                 sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
               fi
               
-              # 🛠️ [الحقن الذكي المتكامل لنواة 5.15]: نقوم بحقن مكاتب النظام القياسية المفقودة ومعها مكتبة susfs_def.h معاً أسفل pkeys.h لضمان التعرف البرمجي الكامل والآمن
+              # 🛠️ [الحقن الذكي المتكامل لنواة 5.15]: حقن مكاتب النظام ومكتبة susfs_def.h بأمان
               if grep -q 'SUSFS_IS_INODE_SUS_MAP\|SUSFS_IS_INODE_OPEN_REDIRECT' ./fs/proc/task_mmu.c && ! grep -qF '#include <linux/susfs_def.h>' ./fs/proc/task_mmu.c; then
                 if grep -qF '#include <linux/pkeys.h>' ./fs/proc/task_mmu.c; then
                   sed -i '/#include <linux\/pkeys.h>/a #include <linux/sched.h>\n#include <linux/cred.h>\n#include <linux/thread_info.h>\n#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/task_mmu.c
@@ -607,11 +605,8 @@ jobs:
                 else
                   sed -i '0,/^#include /s//#include <linux/sched.h>\n#include <linux/cred.h>\n#include <linux/thread_info.h>\n#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif\n&/' ./fs/proc/task_mmu.c
                 fi
-                
-                # تنظيف وحذف ملف الـ Reject تلقائياً لمنع ظهور تحذيرات التضارب سحابياً
                 rm -f ./fs/proc/task_mmu.c.rej
               fi
-              
               if grep -q 'DEFAULT_KSU_MNT_ID\|susfs_mnt_id_ida' ./fs/namespace.c && ! grep -qF '#include <linux/susfs_def.h>' ./fs/namespace.c; then
                 sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif' ./fs/namespace.c
                 if ! grep -q 'extern bool susfs_is_current_ksu_domain' ./fs/namespace.c; then
@@ -672,11 +667,11 @@ jobs:
             fi
           fi
 
-          name: Clone Droidspaces Patch Repository
-          if: inputs.droidspaces != 'off'
-          run: |
-            git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
-            echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
+      - name: Clone Droidspaces Patch Repository
+        if: inputs.droidspaces != 'off'
+        run: |
+          git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
+          echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
             
       # ==================== Backup Original defconfig ====================
       # Used later to generate defconfig fragment (compatible with bazel trim)
